@@ -29,6 +29,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decoder-dim", type=int, default=128)
     parser.add_argument("--decoder-depth", type=int, default=2)
     parser.add_argument("--decoder-heads", type=int, default=4)
+    parser.add_argument("--resume", type=str, default="", help="Path to checkpoint to resume.")
+    parser.add_argument("--save-dir", type=str, default="checkpoints")
+    parser.add_argument("--save-every", type=int, default=1)
     return parser.parse_args()
 
 
@@ -100,6 +103,7 @@ def run_epoch(
 def main() -> None:
     args = parse_args()
     seed_everything(args.seed)
+    os.makedirs(args.save_dir, exist_ok=True)
 
     npz_paths = list_npz_files(args.data_dir)
     dataset = EEGWindowDataset(
@@ -138,7 +142,14 @@ def main() -> None:
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    for epoch in range(1, args.epochs + 1):
+    start_epoch = 1
+    if args.resume:
+        checkpoint = torch.load(args.resume, map_location=device)
+        model.load_state_dict(checkpoint["model_state"])
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        start_epoch = checkpoint.get("epoch", 0) + 1
+
+    for epoch in range(start_epoch, args.epochs + 1):
         train_loss = run_epoch(
             model=model,
             loader=train_loader,
@@ -158,6 +169,19 @@ def main() -> None:
             num_epochs=args.epochs,
         )
         print(f"Epoch {epoch}/{args.epochs} - train_loss: {train_loss:.6f} - val_loss: {val_loss:.6f}")
+
+        if args.save_every > 0 and epoch % args.save_every == 0:
+            checkpoint_path = os.path.join(args.save_dir, f"mae_epoch_{epoch}.pt")
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                },
+                checkpoint_path,
+            )
 
 
 if __name__ == "__main__":
