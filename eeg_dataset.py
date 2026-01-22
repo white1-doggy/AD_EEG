@@ -2,7 +2,9 @@ import bisect
 import os
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Tuple
+
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -19,7 +21,13 @@ class SubjectIndex:
 class EEGWindowDataset(Dataset):
     """Dataset that exposes each EEG window as an individual sample."""
 
-    def __init__(self, npz_paths: List[str], max_cache_size: int = 0) -> None:
+    def __init__(
+        self,
+        npz_paths: List[str],
+        max_cache_size: int = 0,
+        show_progress: bool = False,
+        progress_desc: str = "Loading EEG subjects",
+    ) -> None:
         if not npz_paths:
             raise ValueError("npz_paths must contain at least one file.")
         self._subjects: List[SubjectIndex] = []
@@ -27,8 +35,13 @@ class EEGWindowDataset(Dataset):
         self._cache: "OrderedDict[str, Dict[str, np.ndarray]]" = OrderedDict()
         self._max_cache_size = max_cache_size
 
+        iterator: Iterable[str]
+        iterator = npz_paths
+        if show_progress:
+            iterator = tqdm(npz_paths, desc=progress_desc)
+
         total = 0
-        for path in npz_paths:
+        for path in iterator:
             subject_id = os.path.splitext(os.path.basename(path))[0]
             with np.load(path, mmap_mode="r") as data:
                 num_windows = int(data["x"].shape[0])
