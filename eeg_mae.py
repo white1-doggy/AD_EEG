@@ -5,7 +5,7 @@ from torch import nn
 
 
 class EEGMaskedAutoencoder(nn.Module):
-    """Masked Autoencoder for EEG windows with per-channel/time tokens."""
+    """Masked Autoencoder for EEG windows with per-channel tokens."""
 
     def __init__(
         self,
@@ -16,17 +16,22 @@ class EEGMaskedAutoencoder(nn.Module):
         decoder_depth: int = 2,
         decoder_heads: int = 4,
         mask_ratio: float = 0.5,
+        time_steps: int = 50,
+        band_index: int = 0,
     ) -> None:
         super().__init__()
         if not 0.0 < mask_ratio < 1.0:
             raise ValueError("mask_ratio must be between 0 and 1.")
         self.mask_ratio = mask_ratio
         self.num_channels = 63
-        self.num_timesteps = 50
-        self.num_tokens = self.num_channels * self.num_timesteps
+        self.num_timesteps = time_steps
+        self.num_tokens = self.num_channels
         self.band_dim = 5
+        if not 0 <= band_index < self.band_dim:
+            raise ValueError("band_index must be in [0, 4].")
+        self.band_index = band_index
 
-        self.input_proj = nn.Linear(self.band_dim, embed_dim)
+        self.input_proj = nn.Linear(self.num_timesteps, embed_dim)
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_tokens, embed_dim))
 
         encoder_layer = nn.TransformerEncoderLayer(
@@ -47,7 +52,7 @@ class EEGMaskedAutoencoder(nn.Module):
             batch_first=True,
         )
         self.decoder = nn.TransformerEncoder(decoder_layer, num_layers=decoder_depth)
-        self.decoder_pred = nn.Linear(decoder_dim, self.band_dim)
+        self.decoder_pred = nn.Linear(decoder_dim, self.num_timesteps)
 
         self._init_parameters()
 
@@ -61,14 +66,17 @@ class EEGMaskedAutoencoder(nn.Module):
         x: torch.Tensor,
         valid_mask: Optional[torch.Tensor] = None,
         mask_ratio: Optional[float] = None,
+        band_index: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
-            reconstruction: [B, 5, 63, 50]
+            reconstruction: [B, 63, T]
             loss: scalar tensor
             per_sample_loss: [B] tensor
         """
-        band_tokens = self._to_band_tokens(x)
+        if band_index is None:
+            band_index = self.band_index
+        band_tokens = self._to_band_tokens(x, band_index)
         tokens = self.input_proj(band_tokens)
         if mask_ratio is None:
             mask_ratio = self.mask_ratio
@@ -91,22 +99,25 @@ class EEGMaskedAutoencoder(nn.Module):
         x: torch.Tensor,
         valid_mask: Optional[torch.Tensor] = None,
         mask_ratio: Optional[float] = None,
+        band_index: Optional[int] = None,
     ) -> torch.Tensor:
         """Compute per-window reconstruction error for anomaly detection."""
-        _, _, per_sample_loss = self.forward(x, valid_mask=valid_mask, mask_ratio=mask_ratio)
+        _, _, per_sample_loss = self.forward(
+            x, valid_mask=valid_mask, mask_ratio=mask_ratio, band_index=band_index
+        )
         return per_sample_loss
 
-    def _to_band_tokens(self, x: torch.Tensor) -> torch.Tensor:
+    def _to_band_tokens(self, x: torch.Tensor, band_index: int) -> torch.Tensor:
         if x.ndim != 4:
             raise ValueError("Expected input with shape [B, 5, 63, 50].")
-        x = x.permute(0, 2, 3, 1)  # [B, 63, 50, 5]
-        x = x.reshape(x.shape[0], self.num_tokens, self.band_dim)
-        return x
+        if x.shape[1] != self.band_dim:
+            raise ValueError("Expected band dimension of size 5.")
+        if x.shape[3] != self.num_timesteps:
+            raise ValueError(f"Expected time dimension of size {self.num_timesteps}.")
+        return x[:, band_index, :, :]
 
     def _detokenize(self, tokens: torch.Tensor) -> torch.Tensor:
-        x = tokens.view(tokens.shape[0], self.num_channels, self.num_timesteps, self.band_dim)
-        x = x.permute(0, 3, 1, 2)
-        return x
+        return tokens.view(tokens.shape[0], self.num_channels, self.num_timesteps)
 
     def _apply_mask(
         self, tokens: torch.Tensor, mask_ratio: float

@@ -21,6 +21,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--global-index", type=int, default=-1, help="Global window index.")
     parser.add_argument("--output", type=str, default="reconstruction.png")
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--time-steps", type=int, default=50)
+    parser.add_argument("--band-index", type=int, default=0)
     return parser.parse_args()
 
 
@@ -32,9 +34,11 @@ def list_npz_files(data_dir: str) -> List[str]:
     return paths
 
 
-def load_model(checkpoint_path: str, device: torch.device) -> EEGMaskedAutoencoder:
+def load_model(
+    checkpoint_path: str, device: torch.device, time_steps: int, band_index: int
+) -> EEGMaskedAutoencoder:
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    model = EEGMaskedAutoencoder()
+    model = EEGMaskedAutoencoder(time_steps=time_steps, band_index=band_index)
     model.load_state_dict(checkpoint["model_state"])
     model.to(device)
     model.eval()
@@ -56,27 +60,31 @@ def main() -> None:
     x_window, valid_mask, subject_id = dataset[index]
     x_window = x_window.unsqueeze(0).to(device)
 
-    model = load_model(args.checkpoint, device)
+    model = load_model(args.checkpoint, device, args.time_steps, args.band_index)
     with torch.no_grad():
-        reconstruction, _, _ = model(x_window, valid_mask=valid_mask.unsqueeze(0).to(device))
+        reconstruction, _, _ = model(
+            x_window,
+            valid_mask=valid_mask.unsqueeze(0).to(device),
+            band_index=args.band_index,
+        )
 
     original = x_window.squeeze(0).cpu().numpy()
     recon = reconstruction.squeeze(0).cpu().numpy()
 
-    fig, axes = plt.subplots(len(BANDS), 2, figsize=(10, 12), constrained_layout=True)
-    fig.suptitle(f"Subject: {subject_id} | Index: {index} | Valid: {float(valid_mask):.0f}")
+    band_name = BANDS[args.band_index]
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
+    fig.suptitle(
+        f"Subject: {subject_id} | Index: {index} | Band: {band_name} | Valid: {float(valid_mask):.0f}"
+    )
 
-    for band_idx, band_name in enumerate(BANDS):
-        ax_orig = axes[band_idx, 0]
-        ax_recon = axes[band_idx, 1]
-        ax_orig.imshow(original[band_idx], aspect="auto", origin="lower")
-        ax_recon.imshow(recon[band_idx], aspect="auto", origin="lower")
-        ax_orig.set_title(f"{band_name} - original")
-        ax_recon.set_title(f"{band_name} - recon")
-        ax_orig.set_xlabel("time")
-        ax_recon.set_xlabel("time")
-        ax_orig.set_ylabel("channel")
-        ax_recon.set_ylabel("channel")
+    axes[0].imshow(original[args.band_index], aspect="auto", origin="lower")
+    axes[1].imshow(recon, aspect="auto", origin="lower")
+    axes[0].set_title(f"{band_name} - original")
+    axes[1].set_title(f"{band_name} - recon")
+    axes[0].set_xlabel("time")
+    axes[1].set_xlabel("time")
+    axes[0].set_ylabel("channel")
+    axes[1].set_ylabel("channel")
 
     fig.savefig(args.output, dpi=150)
     print(f"Saved reconstruction figure to {args.output}")

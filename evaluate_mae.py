@@ -24,6 +24,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--cache-size", type=int, default=2)
+    parser.add_argument("--time-steps", type=int, default=50)
+    parser.add_argument("--band-index", type=int, default=0)
     return parser.parse_args()
 
 
@@ -42,9 +44,11 @@ def split_dataset(dataset: Dataset, val_split: float, seed: int) -> Tuple[Datase
     return random_split(dataset, [train_size, val_size], generator=generator)
 
 
-def load_model(checkpoint_path: str, device: torch.device) -> EEGMaskedAutoencoder:
+def load_model(
+    checkpoint_path: str, device: torch.device, time_steps: int, band_index: int
+) -> EEGMaskedAutoencoder:
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    model = EEGMaskedAutoencoder()
+    model = EEGMaskedAutoencoder(time_steps=time_steps, band_index=band_index)
     model.load_state_dict(checkpoint["model_state"])
     model.to(device)
     model.eval()
@@ -71,9 +75,9 @@ def main() -> None:
         pin_memory=True,
     )
 
-    model = load_model(args.checkpoint, device)
+    model = load_model(args.checkpoint, device, args.time_steps, args.band_index)
 
-    band_sse = torch.zeros(len(BANDS), device=device)
+    channel_sse = torch.zeros(63, device=device)
     band_count = 0.0
 
     with torch.no_grad():
@@ -81,26 +85,28 @@ def main() -> None:
         for x, valid_mask, _ in progress:
             x = x.to(device)
             valid_mask = valid_mask.to(device)
-            recon, _, _ = model(x, valid_mask=valid_mask)
+            recon, _, _ = model(x, valid_mask=valid_mask, band_index=args.band_index)
 
-            diff = (recon - x) ** 2
-            per_band_mse = diff.mean(dim=(2, 3))
+            target = x[:, args.band_index, :, :]
+            diff = (recon - target) ** 2
+            per_channel_mse = diff.mean(dim=2)
             valid_mask = valid_mask.view(-1, 1)
-            per_band_mse = per_band_mse * valid_mask
+            per_channel_mse = per_channel_mse * valid_mask
 
             batch_valid = valid_mask.sum().item()
             if batch_valid > 0:
-                band_sse += per_band_mse.sum(dim=0)
+                channel_sse += per_channel_mse.sum(dim=0)
                 band_count += batch_valid
 
     if band_count == 0:
         print("No valid windows found in validation set.")
         return
 
-    band_mse = (band_sse / band_count).cpu().tolist()
-    print("Per-band MSE on validation set:")
-    for name, mse in zip(BANDS, band_mse):
-        print(f"  {name}: {mse:.6f}")
+    channel_mse = (channel_sse / band_count).cpu().tolist()
+    band_name = BANDS[args.band_index]
+    print(f"Per-channel MSE on validation set for band '{band_name}':")
+    for channel_idx, mse in enumerate(channel_mse):
+        print(f"  channel_{channel_idx:02d}: {mse:.6f}")
 
 
 if __name__ == "__main__":

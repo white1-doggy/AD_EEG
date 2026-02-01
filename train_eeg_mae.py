@@ -23,6 +23,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cache-size", type=int, default=2)
     parser.add_argument("--mask-ratio", type=float, default=0.5)
+    parser.add_argument("--time-steps", type=int, default=50)
+    parser.add_argument("--band-index", type=int, default=0)
     parser.add_argument("--embed-dim", type=int, default=128)
     parser.add_argument("--encoder-depth", type=int, default=4)
     parser.add_argument("--encoder-heads", type=int, default=4)
@@ -138,6 +140,8 @@ def main() -> None:
         decoder_depth=args.decoder_depth,
         decoder_heads=args.decoder_heads,
         mask_ratio=args.mask_ratio,
+        time_steps=args.time_steps,
+        band_index=args.band_index,
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
